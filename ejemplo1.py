@@ -152,7 +152,11 @@ agente2 = Agent(
    Presenta respuestas factuales, sin inventar información que no se conoce. 
    Si no conoces la información, deja el campo vacío en el json de respuesta. 
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
    Todos los campos del objeto json deben ser cadena de texto aunque sean numéricos
+=======
+   Todos los campos del objeto JSON deben ser cadena de texto aunque sean numericos.
+>>>>>>> Stashed changes
 =======
    Todos los campos del objeto JSON deben ser cadena de texto aunque sean numericos.
 >>>>>>> Stashed changes
