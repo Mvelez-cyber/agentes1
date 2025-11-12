@@ -11,8 +11,7 @@ from pydantic import BaseModel, Field
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-
-load_dotenv()
+import os
 
 # Importar herramientas de mcp_tools con manejo de errores
 try:
@@ -29,6 +28,37 @@ except ImportError as e:
         return {"success": False, "error": "DuckDuckGo no disponible"}
 
 st.set_page_config(page_title="Análisis de Oportunidad Académica", layout="wide")
+
+# Configurar API key desde secretos de Streamlit (prioridad) o variables de entorno
+try:
+    # Intentar obtener desde secretos de Streamlit
+    if hasattr(st, 'secrets'):
+        # Formato 1: st.secrets["OPENAI_API_KEY"]
+        if "OPENAI_API_KEY" in st.secrets:
+            os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
+        # Formato 2: st.secrets.openai.api_key
+        elif hasattr(st.secrets, 'openai') and hasattr(st.secrets.openai, 'api_key'):
+            os.environ["OPENAI_API_KEY"] = st.secrets.openai.api_key
+        # Formato 3: st.secrets["openai"]["api_key"]
+        elif "openai" in st.secrets and isinstance(st.secrets["openai"], dict):
+            if "api_key" in st.secrets["openai"]:
+                os.environ["OPENAI_API_KEY"] = st.secrets["openai"]["api_key"]
+        
+        # También para Azure si está configurado
+        if "AZURE_OPENAI_API_KEY" in st.secrets:
+            os.environ["AZURE_OPENAI_API_KEY"] = st.secrets["AZURE_OPENAI_API_KEY"]
+        elif hasattr(st.secrets, 'azure') and hasattr(st.secrets.azure, 'openai_api_key'):
+            os.environ["AZURE_OPENAI_API_KEY"] = st.secrets.azure.openai_api_key
+        elif "azure" in st.secrets and isinstance(st.secrets["azure"], dict):
+            if "openai_api_key" in st.secrets["azure"]:
+                os.environ["AZURE_OPENAI_API_KEY"] = st.secrets["azure"]["openai_api_key"]
+except Exception as e:
+    import warnings
+    warnings.warn(f"No se pudieron cargar secretos de Streamlit: {e}")
+
+# Fallback a variables de entorno si no se encontró en secretos
+if "OPENAI_API_KEY" not in os.environ:
+    load_dotenv()
 
 # -------------------------------------------------------------
 # Modelos de datos para los agentes
