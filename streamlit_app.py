@@ -6,7 +6,6 @@ from pathlib import Path
 import json
 import asyncio
 from agents import Agent, Runner, WebSearchTool, function_tool, ModelSettings
-from mcp_tools import tavily_search, wikipedia_search, duckduckgo_search
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 import requests
@@ -14,6 +13,20 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Importar herramientas de mcp_tools con manejo de errores
+try:
+    from mcp_tools import tavily_search, wikipedia_search, duckduckgo_search
+except ImportError as e:
+    import warnings
+    warnings.warn(f"No se pudieron importar algunas herramientas de mcp_tools: {e}")
+    # Funciones de respaldo
+    def tavily_search(query: str, search_depth: str = "basic") -> str:
+        return f"Error: Tavily no disponible. Query: {query}"
+    def wikipedia_search(query: str) -> Dict[str, Any]:
+        return {"success": False, "error": "Wikipedia no disponible"}
+    def duckduckgo_search(query: str) -> Dict[str, Any]:
+        return {"success": False, "error": "DuckDuckGo no disponible"}
 
 st.set_page_config(page_title="Análisis de Oportunidad Académica", layout="wide")
 
