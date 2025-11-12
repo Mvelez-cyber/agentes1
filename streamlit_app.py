@@ -5,13 +5,103 @@ from io import BytesIO
 from pathlib import Path
 import json
 import asyncio
-from agents import Agent, Runner, WebSearchTool, function_tool, ModelSettings
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 import os
+
+# Configurar API key ANTES de importar agents (la librería la lee al importar)
+# Primero intentar desde variables de entorno (para desarrollo local)
+load_dotenv()
+
+# Luego intentar desde secretos de Streamlit (para producción)
+st.set_page_config(page_title="Análisis de Oportunidad Académica", layout="wide")
+
+# Configurar API key desde secretos de Streamlit (prioridad sobre .env)
+api_key_configured = False
+try:
+    if hasattr(st, 'secrets'):
+        # Método principal: acceso directo como diccionario st.secrets["OPENAI_API_KEY"]
+        try:
+            if "OPENAI_API_KEY" in st.secrets:
+                openai_key = st.secrets["OPENAI_API_KEY"]
+                # Asegurarse de que sea string y eliminar comillas si las tiene
+                if isinstance(openai_key, str):
+                    openai_key = openai_key.strip().strip('"').strip("'")
+                os.environ["OPENAI_API_KEY"] = str(openai_key)
+                api_key_configured = True
+        except KeyError:
+            pass
+        except Exception as e:
+            # Si falla el acceso directo, intentar otros métodos
+            try:
+                # Intentar como atributo
+                if hasattr(st.secrets, 'OPENAI_API_KEY'):
+                    openai_key = getattr(st.secrets, 'OPENAI_API_KEY')
+                    if isinstance(openai_key, str):
+                        openai_key = openai_key.strip().strip('"').strip("'")
+                    os.environ["OPENAI_API_KEY"] = str(openai_key)
+                    api_key_configured = True
+            except:
+                pass
+        
+        # También verificar formato anidado st.secrets["openai"]["api_key"]
+        if not api_key_configured:
+            try:
+                if "openai" in st.secrets:
+                    openai_config = st.secrets["openai"]
+                    if isinstance(openai_config, dict) and "api_key" in openai_config:
+                        openai_key = openai_config["api_key"]
+                        if isinstance(openai_key, str):
+                            openai_key = openai_key.strip().strip('"').strip("'")
+                        os.environ["OPENAI_API_KEY"] = str(openai_key)
+                        api_key_configured = True
+            except:
+                pass
+        
+        # También para Azure si está configurado
+        try:
+            if "AZURE_OPENAI_API_KEY" in st.secrets:
+                azure_key = st.secrets["AZURE_OPENAI_API_KEY"]
+                if isinstance(azure_key, str):
+                    azure_key = azure_key.strip().strip('"').strip("'")
+                os.environ["AZURE_OPENAI_API_KEY"] = str(azure_key)
+        except:
+            pass
+            
+except Exception as e:
+    import warnings
+    warnings.warn(f"Error al leer secretos de Streamlit: {e}")
+
+# Verificar si se configuró correctamente
+if not api_key_configured:
+    api_key_configured = "OPENAI_API_KEY" in os.environ and os.environ.get("OPENAI_API_KEY", "").strip()
+
+if not api_key_configured:
+    st.error("""
+    ⚠️ **OPENAI_API_KEY no está configurada**
+    
+    Por favor, configura la API key de una de estas formas:
+    
+    1. **En Streamlit Cloud/Secrets**: 
+       - Ve a la configuración de tu app
+       - Agrega `OPENAI_API_KEY` con tu clave
+    
+    2. **En archivo local `.streamlit/secrets.toml`**:
+       ```toml
+       OPENAI_API_KEY = "tu-api-key-aqui"
+       ```
+    
+    3. **En archivo `.env`** (solo desarrollo local):
+       ```
+       OPENAI_API_KEY=tu-api-key-aqui
+       ```
+    """)
+
+# Ahora importar agents después de configurar la API key
+from agents import Agent, Runner, WebSearchTool, function_tool, ModelSettings
 
 # Importar herramientas de mcp_tools con manejo de errores
 try:
@@ -26,39 +116,6 @@ except ImportError as e:
         return {"success": False, "error": "Wikipedia no disponible"}
     def duckduckgo_search(query: str) -> Dict[str, Any]:
         return {"success": False, "error": "DuckDuckGo no disponible"}
-
-st.set_page_config(page_title="Análisis de Oportunidad Académica", layout="wide")
-
-# Configurar API key desde secretos de Streamlit (prioridad) o variables de entorno
-try:
-    # Intentar obtener desde secretos de Streamlit
-    if hasattr(st, 'secrets'):
-        # Formato 1: st.secrets["OPENAI_API_KEY"]
-        if "OPENAI_API_KEY" in st.secrets:
-            os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
-        # Formato 2: st.secrets.openai.api_key
-        elif hasattr(st.secrets, 'openai') and hasattr(st.secrets.openai, 'api_key'):
-            os.environ["OPENAI_API_KEY"] = st.secrets.openai.api_key
-        # Formato 3: st.secrets["openai"]["api_key"]
-        elif "openai" in st.secrets and isinstance(st.secrets["openai"], dict):
-            if "api_key" in st.secrets["openai"]:
-                os.environ["OPENAI_API_KEY"] = st.secrets["openai"]["api_key"]
-        
-        # También para Azure si está configurado
-        if "AZURE_OPENAI_API_KEY" in st.secrets:
-            os.environ["AZURE_OPENAI_API_KEY"] = st.secrets["AZURE_OPENAI_API_KEY"]
-        elif hasattr(st.secrets, 'azure') and hasattr(st.secrets.azure, 'openai_api_key'):
-            os.environ["AZURE_OPENAI_API_KEY"] = st.secrets.azure.openai_api_key
-        elif "azure" in st.secrets and isinstance(st.secrets["azure"], dict):
-            if "openai_api_key" in st.secrets["azure"]:
-                os.environ["AZURE_OPENAI_API_KEY"] = st.secrets["azure"]["openai_api_key"]
-except Exception as e:
-    import warnings
-    warnings.warn(f"No se pudieron cargar secretos de Streamlit: {e}")
-
-# Fallback a variables de entorno si no se encontró en secretos
-if "OPENAI_API_KEY" not in os.environ:
-    load_dotenv()
 
 # -------------------------------------------------------------
 # Modelos de datos para los agentes
@@ -492,6 +549,43 @@ de programas universitarios nuevos. El sistema utiliza un flujo de 4 agentes:
 3. **Agente de Sumarización**: Resume y crea scores de relación
 4. **Agente de Agregación**: Genera reporte final con recomendaciones
 """)
+
+# Panel de depuración (solo mostrar si hay problemas con la API key)
+if not api_key_configured:
+    with st.expander("🔍 Información de Depuración", expanded=True):
+        st.write("**Estado de la configuración:**")
+        
+        # Verificar os.environ
+        env_key = os.environ.get('OPENAI_API_KEY', '')
+        st.write(f"- OPENAI_API_KEY en os.environ: {'✅ Configurada' if env_key else '❌ No configurada'}")
+        if env_key:
+            st.write(f"  - Valor (primeros 10 caracteres): `{env_key[:10]}...`")
+        
+        # Verificar st.secrets
+        st.write(f"- st.secrets disponible: {'✅ Sí' if hasattr(st, 'secrets') else '❌ No'}")
+        if hasattr(st, 'secrets'):
+            try:
+                # Intentar leer directamente
+                if "OPENAI_API_KEY" in st.secrets:
+                    secret_value = st.secrets["OPENAI_API_KEY"]
+                    st.write(f"- ✅ OPENAI_API_KEY encontrada en st.secrets")
+                    st.write(f"  - Tipo: {type(secret_value).__name__}")
+                    if isinstance(secret_value, str):
+                        st.write(f"  - Longitud: {len(secret_value)} caracteres")
+                        st.write(f"  - Primeros 10 caracteres: `{secret_value[:10]}...`")
+                else:
+                    st.write("- ❌ OPENAI_API_KEY NO encontrada en st.secrets")
+                    # Mostrar qué claves hay disponibles
+                    try:
+                        if hasattr(st.secrets, 'keys'):
+                            secrets_keys = list(st.secrets.keys())
+                            st.write(f"- Claves disponibles en st.secrets: {secrets_keys}")
+                        elif hasattr(st.secrets, '__dict__'):
+                            st.write(f"- Atributos disponibles: {list(st.secrets.__dict__.keys())}")
+                    except:
+                        st.write("- No se pudieron leer las claves de st.secrets")
+            except Exception as e:
+                st.write(f"- ❌ Error al leer st.secrets: {str(e)}")
 
 col1, col2 = st.columns(2)
 
