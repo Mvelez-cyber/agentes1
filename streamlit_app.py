@@ -5,13 +5,15 @@ from io import BytesIO
 from pathlib import Path
 import json
 import asyncio
-from strands import Agent, tool
+from agents import Agent, Runner, WebSearchTool, function_tool, ModelSettings
 from mcp_tools import tavily_search, wikipedia_search, duckduckgo_search
-from model_config import get_configured_model
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 import requests
 from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+
+load_dotenv()
 
 st.set_page_config(page_title="Análisis de Oportunidad Académica", layout="wide")
 
@@ -94,7 +96,7 @@ def analizar_programa(programa_nombre: str):
 # Herramientas para los agentes
 # -------------------------------------------------------------
 
-@tool
+@function_tool
 def fetch_url(url: str, max_chars: int = 4000) -> str:
     """Descarga una página web y retorna texto visible (recortado)."""
     try:
@@ -105,6 +107,28 @@ def fetch_url(url: str, max_chars: int = 4000) -> str:
         return text[:max_chars]
     except Exception as e:
         return f"Error al obtener URL: {str(e)}"
+
+# Adaptar herramientas de mcp_tools para agents
+@function_tool
+def tavily_search_tool(query: str, search_depth: str = "basic") -> str:
+    """Usa Tavily para búsqueda web contextual."""
+    return tavily_search(query, search_depth)
+
+@function_tool
+def wikipedia_search_tool(query: str) -> str:
+    """Busca información en Wikipedia."""
+    result = wikipedia_search(query)
+    if result.get("success"):
+        return f"Título: {result.get('title', '')}\nResumen: {result.get('summary', '')}\nURL: {result.get('url', '')}"
+    return f"Error: {result.get('error', 'No se encontró información')}"
+
+@function_tool
+def duckduckgo_search_tool(query: str) -> str:
+    """Busca información usando DuckDuckGo."""
+    result = duckduckgo_search(query)
+    if result.get("success"):
+        return f"Título: {result.get('title', '')}\nResumen: {result.get('summary', '')}\nURL: {result.get('url', '')}"
+    return f"Error: {result.get('error', 'No se encontró información')}"
 
 # -------------------------------------------------------------
 # Agente 1: Agente Contextual
@@ -153,29 +177,32 @@ Usa las herramientas de búsqueda (tavily_search, wikipedia_search, duckduckgo_s
 Al final, devuelve el resultado completo del proceso de delegación.
 """
 
-@tool
-def delegar_a_sumarizacion(programas_encontrados: str) -> str:
+@function_tool
+async def delegar_a_sumarizacion(programas_encontrados: str) -> str:
     """Delega la tarea de sumarización al agente correspondiente."""
     try:
         agente = Agent(
-            model=get_configured_model(),
-            system_prompt=AGENTE_SUMARIZACION_INSTRUCTIONS,
-            tools=[tavily_search, fetch_url]
+            name="Agente de Sumarización",
+            instructions=AGENTE_SUMARIZACION_INSTRUCTIONS,
+            tools=[tavily_search_tool, fetch_url, WebSearchTool()],
+            model="gpt-4.1",
+            model_settings=ModelSettings(temperature=0.2)
         )
-        prompt = f"Resume y analiza los siguientes programas encontrados:\n\n{programas_encontrados}"
-        response = agente(prompt)
-        return str(response)
+        result = await Runner.run(agente, f"Resume y analiza los siguientes programas encontrados:\n\n{programas_encontrados}")
+        return str(result.final_output)
     except Exception as e:
         return f"Error en sumarización: {str(e)}"
 
-@tool
-def delegar_a_agregacion(resumen_y_scores: str, datos_snies: str = "") -> str:
+@function_tool
+async def delegar_a_agregacion(resumen_y_scores: str, datos_snies: str = "") -> str:
     """Delega la tarea de agregación y generación de reporte final."""
     try:
         agente = Agent(
-            model=get_configured_model(),
-            system_prompt=AGENTE_AGREGACION_INSTRUCTIONS,
-            tools=[]
+            name="Agente de Agregación",
+            instructions=AGENTE_AGREGACION_INSTRUCTIONS,
+            tools=[],
+            model="gpt-4.1",
+            model_settings=ModelSettings(temperature=0.3)
         )
         prompt = f"""Genera un reporte final estructurado con los siguientes datos:
 
@@ -190,8 +217,8 @@ El reporte debe incluir recomendaciones específicas para el nombre del programa
 - Los scores de relación
 - Las tendencias en nombres identificadas
 - Los datos cuantitativos disponibles"""
-        response = agente(prompt)
-        return str(response)
+        result = await Runner.run(agente, prompt)
+        return str(result.final_output)
     except Exception as e:
         return f"Error en agregación: {str(e)}"
 
@@ -341,10 +368,11 @@ async def ejecutar_flujo_agentes(nombre_programa: str, descripcion: str = "", ni
         
         # Paso 1: Agente Contextual
         agente_contextual = Agent(
-            model=get_configured_model(),
-            system_prompt=AGENTE_CONTEXTUAL_INSTRUCTIONS,
+            name="Agente Contextual",
+            instructions=AGENTE_CONTEXTUAL_INSTRUCTIONS,
             tools=[],
-            name="Agente Contextual"
+            model="gpt-4.1",
+            model_settings=ModelSettings(temperature=0.1)
         )
         
         prompt_contextual = f"""
@@ -357,15 +385,24 @@ async def ejecutar_flujo_agentes(nombre_programa: str, descripcion: str = "", ni
         Incluye palabras clave relevantes para la búsqueda y objetivos claros.
         """
         
-        resultado_contextual = agente_contextual(prompt_contextual)
-        contexto_json = str(resultado_contextual)
+        resultado_contextual = await Runner.run(agente_contextual, prompt_contextual)
+        contexto_json = str(resultado_contextual.final_output)
         
         # Paso 2: Agente de Búsqueda en Línea
         agente_busqueda = Agent(
-            model=get_configured_model(),
-            system_prompt=AGENTE_BUSQUEDA_INSTRUCTIONS,
-            tools=[tavily_search, wikipedia_search, duckduckgo_search, fetch_url, delegar_a_sumarizacion, delegar_a_agregacion],
-            name="Agente de Búsqueda en Línea"
+            name="Agente de Búsqueda en Línea",
+            instructions=AGENTE_BUSQUEDA_INSTRUCTIONS,
+            tools=[
+                tavily_search_tool, 
+                wikipedia_search_tool, 
+                duckduckgo_search_tool, 
+                fetch_url, 
+                delegar_a_sumarizacion, 
+                delegar_a_agregacion,
+                WebSearchTool()
+            ],
+            model="gpt-4.1",
+            model_settings=ModelSettings(temperature=0.2)
         )
         
         prompt_busqueda = f"""
@@ -383,8 +420,8 @@ async def ejecutar_flujo_agentes(nombre_programa: str, descripcion: str = "", ni
         Devuelve el resultado final del proceso completo.
         """
         
-        resultado_busqueda = agente_busqueda(prompt_busqueda)
-        resultado_final = str(resultado_busqueda)
+        resultado_busqueda = await Runner.run(agente_busqueda, prompt_busqueda)
+        resultado_final = str(resultado_busqueda.final_output)
         
         return {
             "contexto": contexto_json,
